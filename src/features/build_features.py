@@ -1,9 +1,10 @@
-
 from sklearn.cluster import KMeans
 import numpy as np
-import cv2
+import cv2 as cv
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
+import os
+
 
 
 class SIFTBoVW:
@@ -11,6 +12,20 @@ class SIFTBoVW:
         self.num_clusters = num_clusters
         self.kmeans = None
         self.scaler = None
+        self.pca = None
+        self.SIFTGEO_DTYPE = np.dtype([
+            ("x", "<f4"),
+            ("y", "<f4"),
+            ("scale", "<f4"),
+            ("angle", "<f4"),
+            ("mi11", "<f4"),
+            ("mi12", "<f4"),
+            ("mi21", "<f4"),
+            ("mi22", "<f4"),
+            ("cornerness", "<f4"),
+            ("desdim", "<i4"),
+            ("component", "<u1", 128)
+        ])
 
     def fit(self, data):
         descriptors = self._extract_descriptors(data)
@@ -21,14 +36,16 @@ class SIFTBoVW:
         features = self._compute_features(descriptors)
         return features
 
-    def _extract_descriptors(self, data):
-        sift = cv2.xfeatures2d.SIFT_create()
+    def _extract_descriptors(self, data, output_directory='data/processed'):
+        sift = cv.SIFT_create()
         descriptors = []
-        for image in data:
-            gray_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        for i, image in enumerate(data):
+            gray_image = cv.cvtColor(image, cv.COLOR_RGB2GRAY)
             _, desc = sift.detectAndCompute(gray_image, None)
             if desc is not None:
                 descriptors.extend(desc)
+            output_file = os.path.join(output_directory, f'image_{i}_sift_descriptors.txt')
+            np.savetxt(output_file, desc, delimiter=',')
         return np.array(descriptors)
 
     def _cluster_descriptors(self, descriptors):
@@ -40,12 +57,36 @@ class SIFTBoVW:
         for i, desc in enumerate(descriptors):
             labels = self.kmeans.predict(desc.reshape(1, -1))
             features[i, labels] += 1
+
+        # Standard Scaler normalization
         self.scaler = StandardScaler()
         features = self.scaler.fit_transform(features)
+
+        # PCA dimension reduction
+        self.pca = PCA(n_components=0.95)  # Retain 95% of the variance
+        features = self.pca.fit_transform(features)
+
         return features
 
+    def siftgeo_read_full(self, path):
+        return np.fromfile(path, dtype=self.SIFTGEO_DTYPE)
 
+    def siftgeo_read_desc(self, path):
+        desc = self.siftgeo_read_full(path)["component"]
+        if desc.size == 0:
+            desc = np.zeros((0, 128), dtype='uint8')
+        return desc
 
+    def load_sift_descriptors(self, directory):
+        sift_descriptors = []
+
+        for file_name in os.listdir(directory):
+            if file_name.endswith(".txt"):
+                file_path = os.path.join(directory, file_name)
+                descriptors = np.loadtxt(file_path, delimiter=',')
+                sift_descriptors.append(descriptors)
+
+        return sift_descriptors
 
 
 class HOGFeatureExtractor:
@@ -59,14 +100,14 @@ class HOGFeatureExtractor:
 
         for image in images:
             # Convert the image to grayscale
-            image_gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+            image_gray = cv.cvtColor(image, cv.COLOR_RGB2GRAY)
 
             # Calculate gradients using Sobel filter
-            gradient_x = cv2.Sobel(image_gray, cv2.CV_32F, 1, 0)
-            gradient_y = cv2.Sobel(image_gray, cv2.CV_32F, 0, 1)
+            gradient_x = cv.Sobel(image_gray, cv.CV_32F, 1, 0)
+            gradient_y = cv.Sobel(image_gray, cv.CV_32F, 0, 1)
 
             # Calculate gradient magnitude and orientation
-            magnitude, angle = cv2.cartToPolar(gradient_x, gradient_y, angleInDegrees=True)
+            magnitude, angle = cv.cartToPolar(gradient_x, gradient_y, angleInDegrees=True)
 
             # Create a histogram of oriented gradients
             histogram = np.zeros((self.cells_per_block[1], self.cells_per_block[0], self.orientations))
@@ -102,7 +143,6 @@ class HOGFeatureExtractor:
                 histogram[bin_index] += magnitude
 
         return histogram
-
 
     def normalize_features(self, features):
         scaler = StandardScaler()
