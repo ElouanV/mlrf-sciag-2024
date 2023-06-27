@@ -1,115 +1,209 @@
-
 from sklearn.cluster import KMeans
 import numpy as np
 import cv2
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, Normalizer
 from sklearn.decomposition import PCA
+import os
+from src.utils import *
+import pickle
+from tqdm import tqdm
 
 
 class SIFTBoVW:
-    def __init__(self, num_clusters):
+    def __init__(self, num_clusters=512, data_dir='./data/preprocessed/sift', verbose=False):
         self.num_clusters = num_clusters
+        self.verbose = verbose
         self.kmeans = None
         self.scaler = None
+        self.sift_desc_train = []
+        self.sift_desc_test = []
+        self.train_labels = []
+        self.test_labels = []
+        self.data_dir = data_dir
+        for path in tqdm(os.listdir(os.path.join(data_dir, 'train'))):
+            path = os.path.join(data_dir, 'train', path)
+            self.sift_desc_train.append(siftgeo_read_desc(path))
+            self.train_labels.append(siftgeo_read_label(path))
+        self.sift_desc_train = np.vstack(self.sift_desc_train)
+        print(f'Sift descriptors shape: {self.sift_desc_train.shape}')
+        for path in tqdm(os.listdir(os.path.join(data_dir, 'test'))):
+            path = os.path.join(data_dir, 'test', path)
+            self.sift_desc_test.append(siftgeo_read_desc(path))
+            self.test_labels.append(siftgeo_read_label(path))
+        self.sift_desc_test = np.vstack(self.sift_desc_test)
+        self.sift_desc_train = self.sift_desc_train.astype(np.double)
+        self.sift_desc_test = self.sift_desc_test.astype(np.double)
+        self.train_labels = np.array(self.train_labels)
+        self.test_labels = np.array(self.test_labels)
+        print(f'Loaded {len(self.sift_desc_train)} train descriptors')
+        print(f'Loaded {len(self.sift_desc_test)} test descriptors')
+        print(f'Fiting scaler ...')
+        self.scaler = self._train_scaler()
+        print('Done')
+        # Aplly the scaler to the train and test descriptors
+        self.sift_desc_train = self.scaler.transform(self.sift_desc_train)
+        self.sift_desc_test = self.scaler.transform(self.sift_desc_test)
+        print(f'Fiting PCA ...')
+        self.pca = self._train_pca()
+        print('Done')
+        self.sift_desc_train = self.pca.transform(self.sift_desc_train)
+        self.sift_desc_test = self.pca.transform(self.sift_desc_test)
+        print(f'Shape after PCA: {self.sift_desc_train.shape}')
+        print(f'Fiting KMeans ...')
+        self.kmeans = self._train_kmeans()
+        print('Done')
+        self.normalizer = Normalizer(norm='l2', copy=True)
 
-    def fit(self, data):
-        descriptors = self._extract_descriptors(data)
-        self._cluster_descriptors(descriptors)
+    def _train_pca(self):
+        self.pca = PCA(n_components=0.95, random_state=42)
+        self.pca.fit(self.sift_desc_train)
+        return self.pca
 
-    def transform(self, data):
-        descriptors = self._extract_descriptors(data)
-        features = self._compute_features(descriptors)
-        return features
-
-    def _extract_descriptors(self, data):
-        sift = cv2.xfeatures2d.SIFT_create()
-        descriptors = []
-        for image in data:
-            gray_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-            _, desc = sift.detectAndCompute(gray_image, None)
-            if desc is not None:
-                descriptors.extend(desc)
-        return np.array(descriptors)
-
-    def _cluster_descriptors(self, descriptors):
-        self.kmeans = KMeans(n_clusters=self.num_clusters)
-        self.kmeans.fit(descriptors)
-
-    def _compute_features(self, descriptors):
-        features = np.zeros((len(descriptors), self.num_clusters), dtype=np.float32)
-        for i, desc in enumerate(descriptors):
-            labels = self.kmeans.predict(desc.reshape(1, -1))
-            features[i, labels] += 1
+    def _train_scaler(self):
         self.scaler = StandardScaler()
-        features = self.scaler.fit_transform(features)
-        return features
+        self.scaler.fit(self.sift_desc_train)
+        return self.scaler
+
+    def _train_kmeans(self):
+        # Train kmeans only on a portion of train_data
+        print(self.sift_desc_train.shape)
+        data = self.sift_desc_train[:1000]
+        data = data.astype(np.double)
+        print(data.shape)
+        self.kmeans = KMeans(n_clusters=self.num_clusters, random_state=42, verbose=self.verbose, n_init=1)
+        self.kmeans.fit(data)
+        return self.kmeans
+
+    def _compute_train_descriptor(self, path):
+        sifgeo_list_files = os.listdir(path)
+        image_descriptor = np.zeros((len(sifgeo_list_files), self.kmeans.n_clusters), dtype=np.float32)
+        for ii, descfile in tqdm(enumerate(sifgeo_list_files)):
+            desc = siftgeo_read_desc(os.path.join(path, descfile))
+            if desc is None or desc.shape[0] == 0:
+                continue
+            desc = self.scaler.transform(desc)
+            desc = self.pca.transform(desc)
+            desc = desc.astype(np.double)
+            clabels = self.kmeans.predict(desc.astype('double'))
+            descr_hist = np.histogram(clabels, bins=self.num_clusters, range=(0, self.num_clusters))[0]
+            descr_hist = descr_hist / np.linalg.norm(descr_hist)
+            descr_hist = np.sqrt(descr_hist)
+            descr_hist = self.normalizer.transform(descr_hist.reshape(1, -1))
+            image_descriptor[ii, :] = descr_hist
+        return image_descriptor
+
+    def _compute_test_descriptor(self, path):
+        sifgeo_list_files = os.listdir(path)
+        image_descriptor = np.zeros((len(sifgeo_list_files), self.kmeans.n_clusters), dtype=np.float32)
+        for ii, descfile in tqdm(enumerate(sifgeo_list_files)):
+            desc = siftgeo_read_desc(os.path.join(path, descfile))
+            if desc is None or desc.shape[0] == 0:
+                continue
+            desc = self.scaler.transform(desc)
+            desc = self.pca.transform(desc)
+            clabels = self.kmeans.predict(desc)
+            descr_hist = np.histogram(clabels, bins=self.num_clusters, range=(0, self.num_clusters))[0]
+            descr_hist = descr_hist / np.linalg.norm(descr_hist)
+            descr_hist = np.sqrt(descr_hist)
+            descr_hist = self.normalizer.transform(descr_hist.reshape(1, -1))
+            image_descriptor[ii, :] = descr_hist
+        return image_descriptor
+
+    def get_train(self):
+        path = os.path.join(self.data_dir, 'train')
+        X = self._compute_train_descriptor(path)
+        return X, self.train_labels
+
+    def get_test(self):
+        path = os.path.join(self.data_dir, 'test')
+        X = self._compute_test_descriptor(path)
+        return X, self.test_labels
 
 
+def color_hist(path):
+    with open(path, 'rb') as f:
+        img = pickle.load(f)
+    img = getImage(img)
+    # Turn img ndarray to cv2 image to grayscale
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    hist = cv2.calcHist([img], [0], None, [256], [0, 256])
+    hist = hist / np.linalg.norm(hist)
+    hist = np.sqrt(hist)
+
+    return hist
+
+def color_hist_label(path):
+    filename = path.split('/')[-1]
+    filename = filename.split('.')[0]
+    label = filename.split('_')[-1]
+    return int(label)
+
+class ColorHist:
+    def __init__(self, data_dir='./data/preprocessed/', verbose=False):
+        self.data_dir = data_dir
+        self.verbose = verbose
+        self.train_labels = []
+        self.test_labels = []
+        self.train_hist = []
+        self.test_hist = []
+        for path in tqdm(os.listdir(os.path.join(data_dir, 'train'))):
+            path = os.path.join(data_dir, 'train', path)
+            self.train_hist.append(color_hist(path))
+            self.train_labels.append(color_hist_label(path))
+        for path in tqdm(os.listdir(os.path.join(data_dir, 'test'))):
+            path = os.path.join(data_dir, 'test', path)
+            self.test_hist.append(color_hist(path))
+            self.test_labels.append(color_hist_label(path))
+        self.train_hist = np.array(self.train_hist)
+        self.test_hist = np.array(self.test_hist)
+        self.train_labels = np.array(self.train_labels)
+        self.test_labels = np.array(self.test_labels)
+
+    def get_train(self):
+        return self.train_hist, self.train_labels
+
+    def get_test(self):
+        return self.test_hist, self.test_labels
 
 
+def flatten(path):
+    with open(path, 'rb') as f:
+        img = pickle.load(f)
+    img = getImage(img)
+    # Turn img ndarray to cv2 image to grayscale
+    img = img.flatten()
+    img = img / 255
+    img = np.sqrt(img)
+    return img
 
-class HOGFeatureExtractor:
-    def __init__(self, orientations=9, pixels_per_cell=(8, 8), cells_per_block=(3, 3)):
-        self.orientations = orientations
-        self.pixels_per_cell = pixels_per_cell
-        self.cells_per_block = cells_per_block
+def flatten_label(path):
+    filename = path.split('/')[-1]
+    filename = filename.split('.')[0]
+    label = filename.split('_')[-1]
+    return int(label)
+class Flatten:
+    def __init__(self, data_dir='./data/preprocessed/', verbose=False):
+        self.data_dir = data_dir
+        self.verbose = verbose
+        self.train_labels = []
+        self.test_labels = []
+        self.train_hist = []
+        self.test_hist = []
+        for path in tqdm(os.listdir(os.path.join(data_dir, 'train'))):
+            path = os.path.join(data_dir, 'train', path)
+            self.train_hist.append(flatten(path))
+            self.train_labels.append(color_hist_label(path))
+        for path in tqdm(os.listdir(os.path.join(data_dir, 'test'))):
+            path = os.path.join(data_dir, 'test', path)
+            self.test_hist.append(flatten(path))
+            self.test_labels.append(color_hist_label(path))
+        self.train_hist = np.array(self.train_hist)
+        self.test_hist = np.array(self.test_hist)
+        self.train_labels = np.array(self.train_labels)
+        self.test_labels = np.array(self.test_labels)
 
-    def extract_features(self, images):
-        hog_features = []
+    def get_train(self):
+        return self.train_hist, self.train_labels
 
-        for image in images:
-            # Convert the image to grayscale
-            image_gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-
-            # Calculate gradients using Sobel filter
-            gradient_x = cv2.Sobel(image_gray, cv2.CV_32F, 1, 0)
-            gradient_y = cv2.Sobel(image_gray, cv2.CV_32F, 0, 1)
-
-            # Calculate gradient magnitude and orientation
-            magnitude, angle = cv2.cartToPolar(gradient_x, gradient_y, angleInDegrees=True)
-
-            # Create a histogram of oriented gradients
-            histogram = np.zeros((self.cells_per_block[1], self.cells_per_block[0], self.orientations))
-            cell_size_x = self.pixels_per_cell[0]
-            cell_size_y = self.pixels_per_cell[1]
-            angle_unit = 180 / self.orientations
-            bin_count = int(360 / angle_unit)
-
-            for i in range(self.cells_per_block[1]):
-                for j in range(self.cells_per_block[0]):
-                    cell_magnitude = magnitude[i * cell_size_y:(i + 1) * cell_size_y,
-                                     j * cell_size_x:(j + 1) * cell_size_x]
-                    cell_angle = angle[i * cell_size_y:(i + 1) * cell_size_y,
-                                 j * cell_size_x:(j + 1) * cell_size_x]
-                    histogram[i, j] = self.calculate_histogram(cell_magnitude, cell_angle, bin_count)
-
-            # Flatten the histogram to obtain the feature vector
-            features = histogram.ravel()
-            hog_features.append(features)
-
-        hog_features = np.array(hog_features)
-        return hog_features
-
-    def calculate_histogram(self, cell_magnitude, cell_angle, bin_count):
-        histogram = np.zeros((bin_count,))
-        angle_unit = 360 / bin_count
-
-        for i in range(cell_magnitude.shape[0]):
-            for j in range(cell_magnitude.shape[1]):
-                magnitude = cell_magnitude[i, j]
-                angle = cell_angle[i, j]
-                bin_index = int(angle / angle_unit)
-                histogram[bin_index] += magnitude
-
-        return histogram
-
-
-    def normalize_features(self, features):
-        scaler = StandardScaler()
-        normalized_features = scaler.fit_transform(features)
-        return normalized_features
-
-    def reduce_dimensionality(self, features, n_components):
-        pca = PCA(n_components=n_components)
-        reduced_features = pca.fit_transform(features)
-        return reduced_features
+    def get_test(self):
+        return self.test_hist, self.test_labels
