@@ -54,7 +54,7 @@ def plot_results(model, X_train_color, Y_train_color, X_test_color, Y_test_color
     plt.xlabel('Predicted Label')
     plt.ylabel('True Label')
     plt.title('Color histogram: ' + model_name + ' - ' + str('Accuracy %.2f' % (accuracy * 100)) + '%' + '\nConfusion Matrix')
-    plt.savefig(f'figures/confusion_matrix_{model_name}_color.png')
+    plt.savefig(f'figures/confusion_matrix_{model_name}_color_ft.png')
     plt.show()
 
     # Troisième graphique : Courbe ROC
@@ -65,17 +65,15 @@ def plot_results(model, X_train_color, Y_train_color, X_test_color, Y_test_color
     plt.ylabel('True Positive Rate', fontsize=15)
     plt.title('Color histogram: ' + model_name + ' - ' + str('Accuracy %.2f' % (accuracy * 100)) + '%' + '\nROC Curve', fontsize=20)
     plt.legend(loc="lower right")
-    plt.savefig(f'figures/roc_{model_name}_color.png')
+    plt.savefig(f'figures/roc_{model_name}_color_ft.png')
     plt.show()
 
 
 def train_models():
     models = {
         'dummy': DummyClassifier(strategy='most_frequent', random_state=42),
-        'sgd': SGDClassifier(loss='hinge', penalty='l2', alpha=1e-3, random_state=42, max_iter=5, tol=None),
-        'SVC': SVC(kernel='linear', random_state=42),
+        'KNN': KNeighborsClassifier(n_neighbors=5),
         'random_forest': RandomForestClassifier(n_estimators=100, random_state=42),
-        'MLP': MLPClassifier(hidden_layer_sizes=(100, 100), random_state=42),
         'logistic_regression': LogisticRegression(random_state=42)}
     for model_name, model in models.items():
         print(f'Training {model_name}')
@@ -84,30 +82,19 @@ def train_models():
 
 
 def fine_tune_model():
-    models = {
-        'random_forest': RandomForestClassifier(n_estimators=100, random_state=42),
-        'MLP': MLPClassifier(hidden_layer_sizes=(100, 100), random_state=42),
-        'AdaBoost': AdaBoostClassifier(n_estimators=100, random_state=42),
-        'logistic_regression': LogisticRegression(random_state=42)}
-    grids = {'LinearSVC': {'C': [0.1, 1, 0.01, 0.001]},
-             'random_forest': {'n_estimators': [10, 50, 100, 200, 500], 'max_depth': [5, 10, 20, 50]},
-             'MLP': {'hidden_layer_sizes': [(100,), (100, 100), (100, 100, 100)]},
-             'AdaBoost': {'n_estimators': [10, 50, 100, 200, 500]},
-             'logistic_regression': {'C': [0.1, 1, 0.01, 0.001]}}
-    best_models = {}
-    best_scores = {}
-    for model_name, model in models.items():
-        print(f'Fine tuning {model_name}')
-        grid = grids[model_name]
-        grid_clf = GridSearchCV(model, grid, cv=5, n_jobs=-1)
-        grid_clf.fit(X_train, y_train)
-        print(f'Best params: {grid_clf.best_params_}')
-        print(f'Best score: {grid_clf.best_score_}')
-        models[model_name] = grid_clf.best_estimator_
-        best_models[model_name] = grid_clf.best_estimator_
-        best_scores[model_name] = grid_clf.best_score_
-        plot_results(grid_clf.best_estimator_, X_train, y_train, X_test, y_test, cifar_labels_names)
-    return best_models, best_scores
+    model = RandomForestClassifier(random_state=42)
+    grid = {
+        'n_estimators': [100, 200, 300],
+        'max_depth': [None, 10, 20],
+        'min_samples_split': [2, 5],
+        'min_samples_leaf': [1, 2],
+    }
 
+    grid_search = GridSearchCV(model, grid, n_jobs=-1, cv=3, scoring='accuracy', verbose=3)
+    grid_search.fit(X_train, y_train)
+    print(grid_search.best_params_)
+    print(grid_search.best_score_)
+    print(grid_search.best_estimator_)
+    plot_results(grid_search.best_estimator_, X_train, y_train, X_test, y_test, cifar_labels_names)
 
-train_models()
+fine_tune_model()

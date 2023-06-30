@@ -11,7 +11,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.svm import SVC
 from sklearn.linear_model import SGDClassifier
-
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
 import seaborn as sns
 from sklearn.dummy import DummyClassifier
@@ -62,7 +62,7 @@ def plot_results(model, X_train_color, Y_train_color, X_test_color, Y_test_color
     plt.xlabel('Predicted Label')
     plt.ylabel('True Label')
     plt.title('BoVW: ' + model_name + ' - ' + str('Accuracy %.2f' % (accuracy * 100)) + '%' + '\nConfusion Matrix')
-    plt.savefig(f'figures/confusion_matrix_{model_name}_bovw.png')
+    plt.savefig(f'figures/confusion_matrix_{model_name}_bovw_ft.png')
     plt.show()
 
     # Troisième graphique : Courbe ROC
@@ -73,17 +73,16 @@ def plot_results(model, X_train_color, Y_train_color, X_test_color, Y_test_color
     plt.ylabel('True Positive Rate', fontsize=15)
     plt.title('BoVW: ' + model_name + ' - ' + str('Accuracy %.2f' % (accuracy * 100)) + '%' + '\nROC Curve', fontsize=20)
     plt.legend(loc="lower right")
-    plt.savefig(f'figures/roc_{model_name}_bovw.png')
+    plt.savefig(f'figures/roc_{model_name}_bovw_ft.png')
     plt.show()
 
-
+import warnings
+warnings.filterwarnings('ignore')
 def train_models():
     models = {
         'dummy': DummyClassifier(strategy='most_frequent', random_state=42),
-        'sgd': SGDClassifier(loss='hinge', penalty='l2', alpha=1e-3, random_state=42, max_iter=5, tol=None),
-        'SVC': SVC(kernel='linear', random_state=42),
+        'KNN': KNeighborsClassifier(n_neighbors=5),
         'random_forest': RandomForestClassifier(n_estimators=100, random_state=42),
-        'MLP': MLPClassifier(hidden_layer_sizes=(100, 100), random_state=42),
         'logistic_regression': LogisticRegression(random_state=42)}
     for model_name, model in models.items():
         print(f'Training {model_name}')
@@ -91,10 +90,24 @@ def train_models():
         plot_results(model, X_train, y_train, X_test, y_test, cifar_labels_names)
 
 
-
+def fine_tune():
+    model = LogisticRegression(
+        random_state=42,
+    )
+    param_grid = {
+        'C': [0.1, 1, 10,0.01],
+        'solver': ['newton-cg', 'lbfgs', 'liblinear'],
+        'max_iter': [ 5000]
+    }
+    grid_search = GridSearchCV(model, param_grid, cv=3, verbose=3, n_jobs=-1)
+    grid_search.fit(X_train, y_train)
+    print(grid_search.best_params_)
+    print(grid_search.best_score_)
+    print(grid_search.best_estimator_)
+    plot_results(grid_search.best_estimator_, X_train, y_train, X_test, y_test, cifar_labels_names)
 
 X_test, y_test = sift_bovw.get_test()
 print(f'Test desc shape: {X_test.shape}')
 print(f'Test labels shape: {X_test.shape}')
 
-train_models()
+fine_tune()
