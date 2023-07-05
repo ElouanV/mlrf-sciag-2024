@@ -10,7 +10,7 @@ def _clean_folder(path):
 
 
 class CIFARLoader:
-    def __init__(self, data_src, data_dir, batches=[1]):
+    def __init__(self, data_src, data_dir, batches=[1,2,3,4,5]):
         self.data_dir = data_dir
         self.data_src = data_src
         self.batches = batches
@@ -22,7 +22,6 @@ class CIFARLoader:
         self.val_labels = None
         _clean_folder(self.data_dir)
         self._load_data()
-        self._split_data()
         self._save_data()
 
     def _load_data(self):

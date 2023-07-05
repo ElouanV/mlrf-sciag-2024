@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 
 class SIFTBoVW:
-    def __init__(self, num_clusters=512, data_dir='./data/preprocessed/sift', verbose=False):
+    def __init__(self, num_clusters=512, data_dir='./data/preprocessed/', verbose=False):
         self.num_clusters = num_clusters
         self.verbose = verbose
         self.kmeans = None
@@ -19,7 +19,8 @@ class SIFTBoVW:
         self.sift_desc_test = []
         self.train_labels = []
         self.test_labels = []
-        self.data_dir = data_dir
+        build_sift_desc(data_dir)
+        self.data_dir = os.path.join(data_dir, 'sift')
         for path in tqdm(os.listdir(os.path.join(data_dir, 'train'))):
             path = os.path.join(data_dir, 'train', path)
             self.sift_desc_train.append(siftgeo_read_desc(path))
